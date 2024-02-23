@@ -34,6 +34,8 @@ import android.os.Process;
 import android.os.UserHandle;
 import android.util.ArrayMap;
 import android.util.Pair;
+import android.os.UserManager;
+import android.util.Log;
 import android.util.SparseBooleanArray;
 
 import androidx.annotation.ColorInt;
@@ -45,6 +47,7 @@ import com.android.launcher3.icons.BitmapInfo.Extender;
 import com.android.launcher3.util.FlagOp;
 
 import java.lang.annotation.Retention;
+import java.lang.reflect.Method;
 import java.util.Objects;
 
 /**
@@ -54,6 +57,7 @@ import java.util.Objects;
 public class BaseIconFactory implements AutoCloseable {
 
     public static final int CONFIG_HINT_NO_WRAP = 0x1000000;
+    private static final String TAG = "BaseIconFactory";
 
     private static final int DEFAULT_WRAPPER_BACKGROUND = Color.WHITE;
 
@@ -86,6 +90,9 @@ public class BaseIconFactory implements AutoCloseable {
 
     @NonNull
     private final ColorExtractor mColorExtractor;
+
+    @NonNull
+    private final UserManager mUserManager;
 
     protected final int mFillResIconDpi;
     protected final int mIconBitmapSize;
@@ -120,6 +127,7 @@ public class BaseIconFactory implements AutoCloseable {
 
         mPm = mContext.getPackageManager();
         mColorExtractor = new ColorExtractor();
+        mUserManager = mContext.getSystemService(UserManager.class);
 
         mCanvas = new Canvas();
         mCanvas.setDrawFilter(new PaintFlagsDrawFilter(DITHER_FLAG, FILTER_BITMAP_FLAG));
@@ -277,8 +285,11 @@ public class BaseIconFactory implements AutoCloseable {
                     isBadged = (d != mPm.getUserBadgedIcon(d, options.mUserHandle));
                     mIsUserBadged.put(key, isBadged);
                 }
+                boolean isCloneProfile = !isManagedProfile(mUserManager, key);
                 // Set the clone profile badge flag in case it is present.
-                op = op.setFlag(FLAG_CLONE, isBadged && options.mIsCloneProfile);
+                op = op.setFlag(FLAG_CLONE, isBadged && isCloneProfile);
+                // Set the Work profile badge for all other cases.
+                op = op.setFlag(FLAG_WORK, isBadged && !isCloneProfile);
             }
         }
         return op;
@@ -533,13 +544,26 @@ public class BaseIconFactory implements AutoCloseable {
         return (int) (ICON_BADGE_SCALE * iconSize);
     }
 
+    private static boolean isManagedProfile(UserManager um, int userId) {
+        try {
+            // isManagedProfile is a @SystemApi.
+            String methodName = "isManagedProfile";
+            Method method = um.getClass().getDeclaredMethod(methodName, int.class);
+            Object result = method.invoke(um, userId);
+            if (result instanceof Boolean) {
+                return (boolean) result;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to call #isManagedProfile via reflection from iconloader");
+        }
+        return false;
+    }
+
     public static class IconOptions {
 
         boolean mShrinkNonAdaptiveIcons = true;
 
         boolean mIsInstantApp;
-
-        boolean mIsCloneProfile;
 
         @BitmapGenerationMode
         int mGenerationMode = MODE_WITH_SHADOW;
@@ -598,9 +622,8 @@ public class BaseIconFactory implements AutoCloseable {
         /**
          * Used to determine the badge type for this icon.
          */
-        @NonNull
         public IconOptions setIsCloneProfile(boolean isCloneProfile) {
-            mIsCloneProfile = isCloneProfile;
+            // no-op
             return this;
         }
     }
